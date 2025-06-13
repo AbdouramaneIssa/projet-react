@@ -1,0 +1,1228 @@
+// src/components/Recipes.jsx
+
+import React, { useState, useEffect, useRef } from 'react';
+import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage'; // If you decide to use Firebase Storage
+import { getAuth } from 'firebase/auth'; // Assuming you have Firebase Auth set up
+
+// Ensure your Firebase app is initialized somewhere, e.g., in firebaseConfig.js
+// import { app } from '../firebaseConfig'; // Example import for your Firebase app
+// const db = getFirestore(app);
+// const storage = getStorage(app);
+// const auth = getAuth(app);
+
+// Placeholder for Firebase initialization for demonstration.
+// In a real app, you would import your initialized firebase app and get Firestore, Storage, Auth instances.
+const db = getFirestore();
+const storage = getStorage();
+const auth = getAuth();
+
+const Recipes = () => {
+  const [activeTab, setActiveTab] = useState('personal'); // 'personal' or 'public'
+  const [recipes, setRecipes] = useState([]);
+  const [publicRecipes, setPublicRecipes] = useState([]);
+  const [showAddEditModal, setShowAddEditModal] = useState(false);
+  const [showDetailModal, setShowDetailModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [showLikesModal, setShowLikesModal] = useState(false);
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
+
+  const [currentRecipe, setCurrentRecipe] = useState(null);
+  const [formType, setFormType] = useState('add'); // 'add' or 'edit'
+
+  // Form states
+  const [recipeName, setRecipeName] = useState('');
+  const [recipeAltNames, setRecipeAltNames] = useState('');
+  const [recipeDescription, setRecipeDescription] = useState('');
+  const [ingredients, setIngredients] = useState([]); // { name, quantity, unit, price }
+  const [currentIngredientName, setCurrentIngredientName] = useState('');
+  const [currentIngredientQuantity, setCurrentIngredientQuantity] = useState('');
+  const [currentIngredientUnit, setCurrentIngredientUnit] = useState('');
+  const [currentIngredientPrice, setCurrentIngredientPrice] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [isHalal, setIsHalal] = useState(false);
+  const [isVegetarian, setIsVegetarian] = useState(false);
+  const [isVegan, setIsVegan] = useState(false);
+  const [imageType, setImageType] = useState('url'); // 'url' or 'file'
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageFile, setImageFile] = useState(null);
+  const [category, setCategory] = useState('');
+  const [otherCategory, setOtherCategory] = useState('');
+  const [isComposite, setIsComposite] = useState(false);
+  const [selectedCompositeDishes, setSelectedCompositeDishes] = useState([]); // IDs of dishes
+
+  // Search and Sort
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortByCategory, setSortByCategory] = useState('');
+
+  // Multi-select for export
+  const [selectedRecipesForExport, setSelectedRecipesForExport] = useState([]);
+
+  // Import animation
+  const [importing, setImporting] = useState(false);
+
+  const fileInputRef = useRef(null); // Ref for file input clearing
+
+  const currentUser = auth.currentUser; // Get current authenticated user
+
+  useEffect(() => {
+    fetchPersonalRecipes();
+    fetchPublicRecipes();
+  }, [currentUser]); // Refetch when user changes
+
+  // Utility to convert File to Base64 (if using base64)
+  const getBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
+  const fetchPersonalRecipes = async () => {
+    if (!currentUser) return;
+    try {
+      const q = query(collection(db, 'recipes'), where('userId', '==', currentUser.uid));
+      const querySnapshot = await getDocs(q);
+      const personalRecipesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setRecipes(personalRecipesData);
+    } catch (error) {
+      console.error("Error fetching personal recipes:", error);
+    }
+  };
+
+  const fetchPublicRecipes = async () => {
+    try {
+      const q = query(collection(db, 'recipes'), where('isPublic', '==', true));
+      const querySnapshot = await getDocs(q);
+      const publicRecipesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPublicRecipes(publicRecipesData);
+    } catch (error) {
+      console.error("Error fetching public recipes:", error);
+    }
+  };
+
+  const resetForm = () => {
+    setRecipeName('');
+    setRecipeAltNames('');
+    setRecipeDescription('');
+    setIngredients([]);
+    setCurrentIngredientName('');
+    setCurrentIngredientQuantity('');
+    setCurrentIngredientUnit('');
+    setCurrentIngredientPrice('');
+    setInstructions('');
+    setIsHalal(false);
+    setIsVegetarian(false);
+    setIsVegan(false);
+    setImageType('url');
+    setImageUrl('');
+    setImageFile(null);
+    setCategory('');
+    setOtherCategory('');
+    setIsComposite(false);
+    setSelectedCompositeDishes([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''; // Clear file input
+    }
+  };
+
+  const handleAddEditClick = (recipe = null) => {
+    resetForm();
+    if (recipe) {
+      setFormType('edit');
+      setCurrentRecipe(recipe);
+      setRecipeName(recipe.name || '');
+      setRecipeAltNames(recipe.altNames ? recipe.altNames.join(', ') : '');
+      setRecipeDescription(recipe.description || '');
+      setIngredients(recipe.ingredients || []);
+      setInstructions(recipe.instructions ? recipe.instructions.join('\n') : '');
+      setIsHalal(recipe.isHalal || false);
+      setIsVegetarian(recipe.isVegetarian || false);
+      setIsVegan(recipe.isVegan || false);
+      if (recipe.image.startsWith('http')) {
+        setImageType('url');
+        setImageUrl(recipe.image);
+      } else {
+        setImageType('file'); // Assuming base64 was stored
+        setImageUrl(recipe.image); // Display base64 as URL for preview
+        setImageFile(null); // No file object when editing existing base64
+      }
+      setCategory(recipe.category || '');
+      if (recipe.category === 'Autres' && recipe.otherCategory) {
+        setOtherCategory(recipe.otherCategory);
+      }
+      setIsComposite(recipe.isComposite || false);
+      setSelectedCompositeDishes(recipe.compositeDishes || []);
+    } else {
+      setFormType('add');
+      setCurrentRecipe(null);
+    }
+    setShowAddEditModal(true);
+  };
+
+  const handleImageFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setImageFile(file);
+      // If storing base64 directly:
+      const base64 = await getBase64(file);
+      setImageUrl(base64); // For preview
+      // If using Firebase Storage:
+      // You'd upload the file here and get the URL to setImageUrl
+    }
+  };
+
+  const handleAddIngredient = () => {
+    if (currentIngredientName.trim()) {
+      setIngredients([
+        ...ingredients,
+        {
+          name: currentIngredientName.trim(),
+          quantity: currentIngredientQuantity,
+          unit: currentIngredientUnit,
+          price: currentIngredientPrice || null,
+        },
+      ]);
+      setCurrentIngredientName('');
+      setCurrentIngredientQuantity('');
+      setCurrentIngredientUnit('');
+      setCurrentIngredientPrice('');
+    }
+  };
+
+  const handleRemoveIngredient = (index) => {
+    const newIngredients = ingredients.filter((_, i) => i !== index);
+    setIngredients(newIngredients);
+  };
+
+  const handleSubmitRecipe = async (e) => {
+    e.preventDefault();
+
+    if (!currentUser) {
+      alert("You must be logged in to add/edit recipes.");
+      return;
+    }
+
+    let finalImageUrl = imageUrl;
+    if (imageType === 'file' && imageFile) {
+      // Option 1: Convert to Base64 (simpler for small images, but can bloat Firebase documents)
+      finalImageUrl = await getBase64(imageFile);
+
+      // Option 2: Upload to Firebase Storage (recommended for larger images and better performance)
+      /*
+      const storageRef = ref(storage, `recipe_images/${currentUser.uid}/${imageFile.name}_${Date.now()}`);
+      await uploadBytes(storageRef, imageFile);
+      finalImageUrl = await getDownloadURL(storageRef);
+      */
+    }
+
+    // Calculate total ingredients for composite dishes
+    let combinedIngredients = [];
+    if (isComposite && selectedCompositeDishes.length > 0) {
+        const selectedRecipes = recipes.filter(r => selectedCompositeDishes.includes(r.id));
+        selectedRecipes.forEach(r => {
+            if (r.ingredients) {
+                combinedIngredients = [...combinedIngredients, ...r.ingredients];
+            }
+        });
+    } else {
+        combinedIngredients = ingredients;
+    }
+
+
+    const recipeData = {
+      name: recipeName,
+      altNames: recipeAltNames.split(',').map(name => name.trim()).filter(Boolean),
+      description: recipeDescription,
+      ingredients: combinedIngredients, // Use combinedIngredients for composite
+      instructions: instructions.split('\n').map(step => step.trim()).filter(Boolean),
+      isHalal,
+      isVegetarian,
+      isVegan,
+      image: finalImageUrl,
+      category: category === 'Autres' ? otherCategory : category,
+      userId: currentUser.uid,
+      isPublic: false, // Default to private
+      likes: [], // UIDs of users who liked
+      comments: [], // { userId, userName, comment, timestamp }
+      createdAt: new Date(),
+      isComposite: isComposite,
+      compositeDishes: isComposite ? selectedCompositeDishes : [],
+      isNewImported: false, // For import functionality
+    };
+
+    try {
+      if (formType === 'add') {
+        await addDoc(collection(db, 'recipes'), recipeData);
+        alert('Recipe added successfully!');
+      } else {
+        await updateDoc(doc(db, 'recipes', currentRecipe.id), recipeData);
+        alert('Recipe updated successfully!');
+      }
+      setShowAddEditModal(false);
+      fetchPersonalRecipes(); // Refresh personal recipes
+      fetchPublicRecipes(); // Refresh public recipes (in case one was made public)
+    } catch (error) {
+      console.error("Error adding/updating recipe:", error);
+      alert('Failed to save recipe.');
+    }
+  };
+
+  const handleDeleteRecipe = async (recipeId) => {
+    if (window.confirm("Are you sure you want to delete this recipe?")) {
+      try {
+        await deleteDoc(doc(db, 'recipes', recipeId));
+        alert('Recipe deleted successfully!');
+        fetchPersonalRecipes();
+        fetchPublicRecipes(); // In case it was a public recipe
+      } catch (error) {
+        console.error("Error deleting recipe:", error);
+        alert('Failed to delete recipe.');
+      }
+    }
+  };
+
+  const handleMakePublic = async (recipeId, isCurrentlyPublic) => {
+    try {
+      await updateDoc(doc(db, 'recipes', recipeId), {
+        isPublic: !isCurrentlyPublic,
+      });
+      alert(`Recipe is now ${!isCurrentlyPublic ? 'public' : 'private'}!`);
+      fetchPersonalRecipes();
+      fetchPublicRecipes();
+    } catch (error) {
+      console.error("Error updating public status:", error);
+      alert('Failed to update recipe status.');
+    }
+  };
+
+  const handleViewDetails = (recipe) => {
+    setCurrentRecipe(recipe);
+    setShowDetailModal(true);
+  };
+
+  // Like, Comment, Save functionalities
+  const handleLikeRecipe = async (recipeId, currentLikes) => {
+    if (!currentUser) {
+      alert("You must be logged in to like recipes.");
+      return;
+    }
+    try {
+      const recipeRef = doc(db, 'recipes', recipeId);
+      if (currentLikes.includes(currentUser.uid)) {
+        await updateDoc(recipeRef, {
+          likes: arrayRemove(currentUser.uid)
+        });
+      } else {
+        await updateDoc(recipeRef, {
+          likes: arrayUnion(currentUser.uid)
+        });
+      }
+      fetchPublicRecipes(); // Refresh public recipes to show updated likes
+    } catch (error) {
+      console.error("Error liking recipe:", error);
+    }
+  };
+
+  const handleAddComment = async (recipeId, commentText) => {
+    if (!currentUser || !commentText.trim()) {
+      alert("You must be logged in and provide a comment.");
+      return;
+    }
+    try {
+      const recipeRef = doc(db, 'recipes', recipeId);
+      const newComment = {
+        userId: currentUser.uid,
+        userName: currentUser.displayName || currentUser.email, // Use display name or email
+        userPic: currentUser.photoURL || '', // User's profile picture
+        comment: commentText.trim(),
+        timestamp: new Date(),
+      };
+      await updateDoc(recipeRef, {
+        comments: arrayUnion(newComment)
+      });
+      fetchPublicRecipes();
+      alert("Comment added!");
+    } catch (error) {
+      console.error("Error adding comment:", error);
+    }
+  };
+
+  const handleSaveRecipe = async (recipe) => {
+    if (!currentUser) {
+      alert("You must be logged in to save recipes.");
+      return;
+    }
+    try {
+      // Create a new private copy of the public recipe for the current user
+      const savedRecipeData = {
+        ...recipe,
+        userId: currentUser.uid,
+        isPublic: false, // Saved recipe is always private
+        likes: [], // Reset likes for the saved private copy
+        comments: [], // Reset comments for the saved private copy
+        createdAt: new Date(), // New creation timestamp
+        originalPublicRecipeId: recipe.id, // Keep a reference to the original public recipe
+      };
+      // Remove fields that are not relevant for a new private copy or might cause issues
+      delete savedRecipeData.id;
+
+      await addDoc(collection(db, 'recipes'), savedRecipeData);
+      alert('Recipe saved to your private collection!');
+      fetchPersonalRecipes();
+    } catch (error) {
+      console.error("Error saving recipe:", error);
+      alert('Failed to save recipe.');
+    }
+  };
+
+  // Search and Sort Logic
+  const filteredPersonalRecipes = recipes
+    .filter(recipe => {
+      const searchLower = searchQuery.toLowerCase();
+      return (
+        recipe.name.toLowerCase().includes(searchLower) ||
+        recipe.description.toLowerCase().includes(searchLower) ||
+        (recipe.altNames && recipe.altNames.some(name => name.toLowerCase().includes(searchLower))) ||
+        (recipe.ingredients && recipe.ingredients.some(ing => ing.name.toLowerCase().includes(searchLower))) ||
+        (recipe.instructions && recipe.instructions.some(inst => inst.toLowerCase().includes(searchLower))) ||
+        (recipe.category && recipe.category.toLowerCase().includes(searchLower))
+      );
+    })
+    .filter(recipe => {
+      return sortByCategory === '' || recipe.category === sortByCategory;
+    });
+
+    const filteredPublicRecipes = publicRecipes
+    .filter(recipe => {
+      const searchLower = searchQuery.toLowerCase();
+      return (
+        recipe.name.toLowerCase().includes(searchLower) ||
+        recipe.description.toLowerCase().includes(searchLower) ||
+        (recipe.altNames && recipe.altNames.some(name => name.toLowerCase().includes(searchLower))) ||
+        (recipe.ingredients && recipe.ingredients.some(ing => ing.name.toLowerCase().includes(searchLower))) ||
+        (recipe.instructions && recipe.instructions.some(inst => inst.toLowerCase().includes(searchLower))) ||
+        (recipe.category && recipe.category.toLowerCase().includes(searchLower))
+      );
+    })
+    .filter(recipe => {
+      return sortByCategory === '' || recipe.category === sortByCategory;
+    });
+
+  // Export/Import JSON
+  const handleExportRecipes = () => {
+    if (selectedRecipesForExport.length === 0) {
+      alert("Please select at least one recipe to export.");
+      return;
+    }
+    const recipesToExport = recipes
+      .filter(recipe => selectedRecipesForExport.includes(recipe.id))
+      .map(({ id, userId, isPublic, likes, comments, createdAt, isNewImported, ...rest }) => ({
+        ...rest,
+        isPublic: false, // Ensure exported recipes are marked as private
+        isNewImported: true, // Mark them as new if imported by someone else
+      }));
+
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(recipesToExport, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "recipes.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+    setSelectedRecipesForExport([]); // Clear selection after export
+  };
+
+  const handleFileImport = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          setImporting(true);
+          const importedRecipes = JSON.parse(e.target.result);
+          if (!Array.isArray(importedRecipes)) {
+            throw new Error("Invalid JSON format. Expected an array of recipes.");
+          }
+
+          for (const recipe of importedRecipes) {
+            // Ensure imported recipes are private and marked as new
+            const recipeToSave = {
+              ...recipe,
+              userId: currentUser.uid,
+              isPublic: false,
+              isNewImported: true,
+              createdAt: new Date(), // Set new creation date
+            };
+            await addDoc(collection(db, 'recipes'), recipeToSave);
+          }
+          alert('Recipes imported successfully!');
+          fetchPersonalRecipes();
+          setShowImportModal(false);
+        } catch (error) {
+          console.error("Error importing recipes:", error);
+          alert(`Failed to import recipes: ${error.message}`);
+        } finally {
+          setImporting(false);
+          event.target.value = ''; // Clear file input
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const handleSelectRecipeForExport = (recipeId) => {
+    setSelectedRecipesForExport(prev =>
+      prev.includes(recipeId)
+        ? prev.filter(id => id !== recipeId)
+        : [...prev, recipeId]
+    );
+  };
+
+  const handleSelectAllForExport = () => {
+    if (selectedRecipesForExport.length === recipes.length) {
+      setSelectedRecipesForExport([]);
+    } else {
+      setSelectedRecipesForExport(recipes.map(r => r.id));
+    }
+  };
+
+  const handleViewRecipeClick = async (recipeId) => {
+    try {
+        // Find the recipe in the current 'recipes' array
+        const recipe = recipes.find(r => r.id === recipeId);
+        if (recipe && recipe.isNewImported) {
+            // Update the recipe in Firebase to mark it as not new
+            const recipeRef = doc(db, 'recipes', recipeId);
+            await updateDoc(recipeRef, {
+                isNewImported: false,
+            });
+            // Update local state to reflect the change
+            setRecipes(prevRecipes =>
+                prevRecipes.map(r =>
+                    r.id === recipeId ? { ...r, isNewImported: false } : r
+                )
+            );
+            // Also update the current recipe for the modal if it's open
+            setCurrentRecipe(prev => prev && prev.id === recipeId ? { ...prev, isNewImported: false } : prev);
+        }
+        // Now open the detail modal
+        handleViewDetails(recipe);
+    } catch (error) {
+        console.error("Error marking recipe as old:", error);
+    }
+};
+
+  const handleCompositeDishSelection = (dishId) => {
+    setSelectedCompositeDishes(prev =>
+      prev.includes(dishId)
+        ? prev.filter(id => id !== dishId)
+        : [...prev, dishId]
+    );
+  };
+
+  return (
+    <div className="container mx-auto px-4 py-8 dark:bg-gray-900 dark:text-white min-h-screen">
+      <h1 className="text-4xl font-bold text-center mb-8 text-primary-600 dark:text-primary-400">Gérer mes Plats</h1>
+
+      <div className="flex justify-center mb-8">
+        <button
+          className={`px-6 py-3 text-lg font-semibold rounded-t-lg transition-colors duration-200 ${activeTab === 'personal' ? 'bg-primary-600 text-white shadow-lg' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-primary-100 dark:hover:bg-gray-600'}`}
+          onClick={() => setActiveTab('personal')}
+        >
+          Mes Plats Personnels
+        </button>
+        <button
+          className={`px-6 py-3 text-lg font-semibold rounded-t-lg transition-colors duration-200 ${activeTab === 'public' ? 'bg-primary-600 text-white shadow-lg' : 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 hover:bg-primary-100 dark:hover:bg-gray-600'}`}
+          onClick={() => setActiveTab('public')}
+        >
+          Plats Publics
+        </button>
+      </div>
+
+      {/* Search and Sort Section */}
+      <div className="mb-8 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md flex flex-col md:flex-row gap-4 items-center">
+        <input
+          type="text"
+          placeholder="Rechercher un plat..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="flex-grow px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-primary-500 focus:border-primary-500 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+        />
+        <select
+          value={sortByCategory}
+          onChange={(e) => setSortByCategory(e.target.value)}
+          className="px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-primary-500 focus:border-primary-500 bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+        >
+          <option value="">Trier par catégorie</option>
+          <option value="Petit Déjeuner">Petit Déjeuner</option>
+          <option value="Déjeuner">Déjeuner</option>
+          <option value="Dîner">Dîner</option>
+          <option value="Dessert">Dessert</option>
+          <option value="Boisson">Boisson</option>
+          <option value="Snack">Snack</option>
+          {/* Add more categories if needed */}
+          {activeTab === 'personal' && recipes.map((r, i) => (r.category && r.category !== 'Autres' && !['Petit Déjeuner', 'Déjeuner', 'Dîner', 'Dessert', 'Boisson', 'Snack'].includes(r.category)) ? <option key={i} value={r.category}>{r.category}</option> : null)}
+          {activeTab === 'public' && publicRecipes.map((r, i) => (r.category && r.category !== 'Autres' && !['Petit Déjeuner', 'Déjeuner', 'Dîner', 'Dessert', 'Boisson', 'Snack'].includes(r.category)) ? <option key={i} value={r.category}>{r.category}</option> : null)}
+        </select>
+      </div>
+
+      {activeTab === 'personal' && (
+        <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Mes Recettes Privées</h2>
+            <div className="flex gap-4">
+                <button
+                    onClick={() => handleAddEditClick()}
+                    className="px-6 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700 transition duration-300"
+                >
+                    Ajouter un Nouveau Plat
+                </button>
+                <button
+                    onClick={() => setShowImportModal(true)}
+                    className="px-6 py-2 bg-green-600 text-white rounded-lg shadow-md hover:bg-green-700 transition duration-300"
+                >
+                    Importer Plats
+                </button>
+                <button
+                    onClick={handleExportRecipes}
+                    disabled={selectedRecipesForExport.length === 0}
+                    className={`px-6 py-2 rounded-lg shadow-md transition duration-300 ${selectedRecipesForExport.length === 0 ? 'bg-gray-400 text-gray-700 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-700'}`}
+                >
+                    Exporter Plats Sélectionnés ({selectedRecipesForExport.length})
+                </button>
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="inline-flex items-center">
+              <input
+                type="checkbox"
+                className="form-checkbox h-5 w-5 text-blue-600"
+                checked={selectedRecipesForExport.length === recipes.length && recipes.length > 0}
+                onChange={handleSelectAllForExport}
+              />
+              <span className="ml-2 text-gray-700 dark:text-gray-300">Sélectionner tout</span>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredPersonalRecipes.length > 0 ? (
+              filteredPersonalRecipes.map((recipe) => (
+                <div key={recipe.id} className="bg-gray-100 dark:bg-gray-700 rounded-lg shadow-md overflow-hidden relative">
+                  {recipe.isNewImported && (
+                      <span className="absolute top-2 left-2 bg-yellow-500 text-white text-xs font-bold px-2 py-1 rounded-full">NEW</span>
+                  )}
+                  <input
+                    type="checkbox"
+                    className="absolute top-2 right-2 h-6 w-6 text-blue-600 rounded"
+                    checked={selectedRecipesForExport.includes(recipe.id)}
+                    onChange={() => handleSelectRecipeForExport(recipe.id)}
+                  />
+                  <img src={recipe.image || 'https://via.placeholder.com/150'} alt={recipe.name} className="w-full h-48 object-cover" />
+                  <div className="p-4">
+                    <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">{recipe.name}</h3>
+                    <p className="text-gray-700 dark:text-gray-300 text-sm mb-4 line-clamp-2">{recipe.description}</p>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => handleViewRecipeClick(recipe.id)} // Use handleViewRecipeClick to mark as old
+                        className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm hover:bg-primary-600 transition duration-300"
+                      >
+                        Voir Détails
+                      </button>
+                      <button
+                        onClick={() => handleAddEditClick(recipe)}
+                        className="px-4 py-2 bg-yellow-500 text-white rounded-lg text-sm hover:bg-yellow-600 transition duration-300"
+                      >
+                        Modifier
+                      </button>
+                      <button
+                        onClick={() => handleDeleteRecipe(recipe.id)}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition duration-300"
+                      >
+                        Supprimer
+                      </button>
+                      <button
+                        onClick={() => handleMakePublic(recipe.id, recipe.isPublic)}
+                        className={`px-4 py-2 rounded-lg text-sm transition duration-300 ${recipe.isPublic ? 'bg-gray-500 hover:bg-gray-600' : 'bg-green-500 hover:bg-green-600'} text-white`}
+                      >
+                        {recipe.isPublic ? 'Rendre Privé' : 'Rendre Public'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-center text-gray-600 dark:text-gray-400 col-span-full">Aucun plat personnel trouvé.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'public' && (
+        <div className="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+          <h2 className="text-2xl font-semibold text-gray-800 dark:text-gray-100 mb-6">Plats Publics</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredPublicRecipes.length > 0 ? (
+              filteredPublicRecipes.map((recipe) => (
+                <div key={recipe.id} className="bg-gray-100 dark:bg-gray-700 rounded-lg shadow-md overflow-hidden">
+                  <img src={recipe.image || 'https://via.placeholder.com/150'} alt={recipe.name} className="w-full h-48 object-cover" />
+                  <div className="p-4">
+                    <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">{recipe.name}</h3>
+                    <p className="text-gray-700 dark:text-gray-300 text-sm mb-4 line-clamp-2">{recipe.description}</p>
+                    <div className="flex items-center justify-between mt-4">
+                      <button
+                        onClick={() => handleLikeRecipe(recipe.id, recipe.likes || [])}
+                        className={`flex items-center gap-1 px-3 py-1 rounded-full text-sm transition duration-300 ${recipe.likes && recipe.likes.includes(currentUser?.uid) ? 'bg-red-500 text-white' : 'bg-gray-200 dark:bg-gray-600 text-gray-800 dark:text-gray-200'}`}
+                      >
+                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd"></path></svg>
+                        {recipe.likes ? recipe.likes.length : 0}
+                      </button>
+                      <button
+                          onClick={() => { setCurrentRecipe(recipe); setShowLikesModal(true); }}
+                          className="flex items-center gap-1 px-3 py-1 bg-blue-500 text-white rounded-full text-sm hover:bg-blue-600 transition duration-300"
+                      >
+                          Voir Likes
+                      </button>
+                      <button
+                        onClick={() => { setCurrentRecipe(recipe); setShowCommentsModal(true); }}
+                        className="flex items-center gap-1 px-3 py-1 bg-blue-500 text-white rounded-full text-sm hover:bg-blue-600 transition duration-300"
+                      >
+                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v6a2 2 0 01-2 2H8l-4 4V5z"></path></svg>
+                        {recipe.comments ? recipe.comments.length : 0}
+                      </button>
+                      <button
+                        onClick={() => handleSaveRecipe(recipe)}
+                        className="px-3 py-1 bg-purple-500 text-white rounded-full text-sm hover:bg-purple-600 transition duration-300"
+                      >
+                        Sauvegarder
+                      </button>
+                      <button
+                        onClick={() => handleViewDetails(recipe)}
+                        className="px-3 py-1 bg-primary-500 text-white rounded-full text-sm hover:bg-primary-600 transition duration-300"
+                      >
+                        Détails
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-center text-gray-600 dark:text-gray-400 col-span-full">Aucun plat public trouvé.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit Recipe Modal */}
+      {showAddEditModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-8 overflow-y-auto max-h-[90vh]">
+            <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6 text-center">
+              {formType === 'add' ? 'Ajouter un Nouveau Plat' : 'Modifier le Plat'}
+            </h2>
+            <form onSubmit={handleSubmitRecipe}>
+              <div className="mb-4">
+                <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Nom du Plat *</label>
+                <input
+                  type="text"
+                  value={recipeName}
+                  onChange={(e) => setRecipeName(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                  required
+                />
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Noms Alternatifs (séparés par des virgules)</label>
+                <input
+                  type="text"
+                  value={recipeAltNames}
+                  onChange={(e) => setRecipeAltNames(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="E.g., Watapufu, Ndolé"
+                />
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Description</label>
+                <textarea
+                  value={recipeDescription}
+                  onChange={(e) => setRecipeDescription(e.target.value)}
+                  rows="3"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                ></textarea>
+              </div>
+
+              {/* Ingredients Section */}
+              <div className="mb-4 p-4 border border-gray-200 dark:border-gray-600 rounded-lg">
+                <h3 className="text-xl font-semibold text-gray-800 dark:text-gray-100 mb-4">Ingrédients</h3>
+                {ingredients.length > 0 && (
+                  <ul className="list-disc pl-5 mb-4 text-gray-700 dark:text-gray-300">
+                    {ingredients.map((ing, index) => (
+                      <li key={index} className="flex justify-between items-center py-1">
+                        <span>{ing.name} - {ing.quantity} {ing.unit} {ing.price && `(${ing.price} CFA)`}</span>
+                        <button type="button" onClick={() => handleRemoveIngredient(index)} className="text-red-500 hover:text-red-700 text-sm ml-4">Supprimer</button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                  <input
+                    type="text"
+                    placeholder="Nom de l'ingrédient"
+                    value={currentIngredientName}
+                    onChange={(e) => setCurrentIngredientName(e.target.value)}
+                    className="col-span-full md:col-span-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Quantité"
+                    value={currentIngredientQuantity}
+                    onChange={(e) => setCurrentIngredientQuantity(e.target.value)}
+                    className="col-span-full md:col-span-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                  <select
+                    value={currentIngredientUnit}
+                    onChange={(e) => setCurrentIngredientUnit(e.target.value)}
+                    className="col-span-full md:col-span-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="">Unité</option>
+                    <option value="g">Grammes</option>
+                    <option value="kg">Kilogrammes</option>
+                    <option value="ml">Millilitres</option>
+                    <option value="L">Litres</option>
+                    <option value="pièce">Pièce</option>
+                    <option value="cuillère">Cuillère</option>
+                    <option value="pincée">Pincée</option>
+                    <option value="tasse">Tasse</option>
+                    {/* Add more units */}
+                  </select>
+                  <input
+                    type="number"
+                    placeholder="Prix (optionnel)"
+                    value={currentIngredientPrice}
+                    onChange={(e) => setCurrentIngredientPrice(e.target.value)}
+                    className="col-span-full md:col-span-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
+                </div>
+                <button type="button" onClick={handleAddIngredient} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition duration-300">Ajouter Ingrédient</button>
+              </div>
+
+              {/* Instructions Section */}
+              <div className="mb-4">
+                <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Instructions (une étape par ligne)</label>
+                <textarea
+                  value={instructions}
+                  onChange={(e) => setInstructions(e.target.value)}
+                  rows="5"
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Étape 1: Couper les légumes&#10;Étape 2: Faire revenir l'oignon..."
+                ></textarea>
+              </div>
+
+              {/* Additional Info Checkboxes */}
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">Informations Supplémentaires</h3>
+                <div className="flex flex-wrap gap-4">
+                  <label className="inline-flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={isHalal}
+                      onChange={(e) => setIsHalal(e.target.checked)}
+                      className="form-checkbox h-5 w-5 text-blue-600"
+                    />
+                    <span className="ml-2 text-gray-700 dark:text-gray-300">Halal</span>
+                  </label>
+                  <label className="inline-flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={isVegetarian}
+                      onChange={(e) => setIsVegetarian(e.target.checked)}
+                      className="form-checkbox h-5 w-5 text-blue-600"
+                    />
+                    <span className="ml-2 text-gray-700 dark:text-gray-300">Végétarien</span>
+                  </label>
+                  <label className="inline-flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={isVegan}
+                      onChange={(e) => setIsVegan(e.target.checked)}
+                      className="form-checkbox h-5 w-5 text-blue-600"
+                    />
+                    <span className="ml-2 text-gray-700 dark:text-gray-300">Vegan</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Image Upload/URL */}
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">Image du Plat</h3>
+                <div className="flex gap-4 mb-2">
+                  <label className="inline-flex items-center">
+                    <input
+                      type="radio"
+                      value="url"
+                      checked={imageType === 'url'}
+                      onChange={() => setImageType('url')}
+                      className="form-radio h-4 w-4 text-blue-600"
+                    />
+                    <span className="ml-2 text-gray-700 dark:text-gray-300">URL de l'image</span>
+                  </label>
+                  <label className="inline-flex items-center">
+                    <input
+                      type="radio"
+                      value="file"
+                      checked={imageType === 'file'}
+                      onChange={() => setImageType('file')}
+                      className="form-radio h-4 w-4 text-blue-600"
+                    />
+                    <span className="ml-2 text-gray-700 dark:text-gray-300">Télécharger un fichier</span>
+                  </label>
+                </div>
+                {imageType === 'url' ? (
+                  <input
+                    type="url"
+                    value={imageUrl}
+                    onChange={(e) => setImageUrl(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="URL de l'image du plat"
+                  />
+                ) : (
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageFileChange}
+                    ref={fileInputRef}
+                    className="w-full text-sm text-gray-900 dark:text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-800 dark:file:text-white dark:hover:file:bg-blue-700"
+                  />
+                )}
+                {imageUrl && (
+                  <div className="mt-4 flex justify-center">
+                    <img src={imageUrl} alt="Prévisualisation du plat" className="w-32 h-32 rounded-lg object-cover border-2 border-blue-500 shadow-md" />
+                  </div>
+                )}
+              </div>
+
+              {/* Category Selection */}
+              <div className="mb-4">
+                <label className="block text-gray-700 dark:text-gray-300 text-sm font-bold mb-2">Catégorie du Plat *</label>
+                <select
+                  value={category}
+                  onChange={(e) => { setCategory(e.target.value); setOtherCategory(''); }}
+                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                  required
+                >
+                  <option value="">Sélectionner une catégorie</option>
+                  <option value="Petit Déjeuner">Petit Déjeuner</option>
+                  <option value="Déjeuner">Déjeuner</option>
+                  <option value="Dîner">Dîner</option>
+                  <option value="Dessert">Dessert</option>
+                  <option value="Boisson">Boisson</option>
+                  <option value="Snack">Snack</option>
+                  <option value="Autres">Autres</option>
+                </select>
+                {category === 'Autres' && (
+                  <input
+                    type="text"
+                    value={otherCategory}
+                    onChange={(e) => setOtherCategory(e.target.value)}
+                    className="mt-2 w-full px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Entrez une autre catégorie"
+                    required
+                  />
+                )}
+              </div>
+
+              {/* Composite Dish Section */}
+              <div className="mb-6 p-4 border border-gray-200 dark:border-gray-600 rounded-lg">
+                <label className="inline-flex items-center mb-2">
+                  <input
+                    type="checkbox"
+                    checked={isComposite}
+                    onChange={(e) => setIsComposite(e.target.checked)}
+                    className="form-checkbox h-5 w-5 text-blue-600"
+                  />
+                  <span className="ml-2 text-gray-700 dark:text-gray-300 text-lg font-semibold">Plat Composé</span>
+                </label>
+
+                {isComposite && (
+                  <div className="mt-4">
+                    <p className="text-gray-700 dark:text-gray-300 mb-3">Sélectionnez les plats existants qui composent ce nouveau plat :</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-60 overflow-y-auto custom-scrollbar p-2 rounded-lg bg-gray-50 dark:bg-gray-700">
+                      {recipes.filter(r => r.id !== currentRecipe?.id).map((dish) => ( // Exclude current dish from selection
+                        <label key={dish.id} className="flex items-center p-2 border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={selectedCompositeDishes.includes(dish.id)}
+                            onChange={() => handleCompositeDishSelection(dish.id)}
+                            className="form-checkbox h-5 w-5 text-blue-600"
+                          />
+                          <img src={dish.image || 'https://via.placeholder.com/50'} alt={dish.name} className="w-12 h-12 object-cover rounded-full ml-3 mr-4" />
+                          <div>
+                            <span className="font-semibold text-gray-800 dark:text-gray-100">{dish.name}</span>
+                            <ul className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                              {dish.ingredients && dish.ingredients.slice(0, 2).map((ing, i) => (
+                                <li key={i}>{ing.name} ({ing.quantity} {ing.unit})</li>
+                              ))}
+                              {dish.ingredients && dish.ingredients.length > 2 && <li>...</li>}
+                            </ul>
+                          </div>
+                        </label>
+                      ))}
+                      {recipes.filter(r => r.id !== currentRecipe?.id).length === 0 && (
+                        <p className="text-center text-gray-600 dark:text-gray-400 col-span-full">Aucun autre plat disponible pour la composition.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+
+              <div className="flex justify-end gap-4 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowAddEditModal(false)}
+                  className="px-6 py-2 bg-gray-300 text-gray-800 rounded-lg shadow-md hover:bg-gray-400 transition duration-300 dark:bg-gray-600 dark:text-white dark:hover:bg-gray-500"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700 transition duration-300"
+                >
+                  {formType === 'add' ? 'Ajouter le Plat' : 'Mettre à jour le Plat'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Recipe Detail Modal */}
+      {showDetailModal && currentRecipe && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-8 overflow-y-auto max-h-[90vh] relative">
+            <button
+              onClick={() => setShowDetailModal(false)}
+              className="absolute top-4 right-4 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-2xl font-bold"
+            >
+              &times;
+            </button>
+            <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4 text-center">{currentRecipe.name}</h2>
+            {currentRecipe.altNames && currentRecipe.altNames.length > 0 && (
+              <p className="text-gray-600 dark:text-gray-400 text-center mb-4">
+                (Noms Alternatifs: {currentRecipe.altNames.join(', ')})
+              </p>
+            )}
+            <div className="flex justify-center mb-6">
+              <img src={currentRecipe.image || 'https://via.placeholder.com/300'} alt={currentRecipe.name} className="w-64 h-64 object-cover rounded-lg shadow-md border-2 border-primary-500" />
+            </div>
+
+            <p className="text-gray-700 dark:text-gray-300 text-lg mb-6 text-center">{currentRecipe.description}</p>
+
+            <div className="mb-6">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-100 mb-3">Ingrédients:</h3>
+              <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300 text-lg">
+                {currentRecipe.ingredients && currentRecipe.ingredients.map((ing, index) => (
+                  <li key={index}>{ing.name} - {ing.quantity} {ing.unit} {ing.price && `(${ing.price} CFA)`}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="mb-6">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-100 mb-3">Instructions:</h3>
+              <ol className="list-decimal pl-5 text-gray-700 dark:text-gray-300 text-lg">
+                {currentRecipe.instructions && currentRecipe.instructions.map((step, index) => (
+                  <li key={index} className="mb-2">{step}</li>
+                ))}
+              </ol>
+            </div>
+
+            <div className="mb-6">
+              <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-100 mb-3">Informations Supplémentaires:</h3>
+              <ul className="list-disc pl-5 text-gray-700 dark:text-gray-300 text-lg">
+                {currentRecipe.isHalal && <li>Halal</li>}
+                {currentRecipe.isVegetarian && <li>Végétarien</li>}
+                {currentRecipe.isVegan && <li>Vegan</li>}
+                {currentRecipe.category && <li>Catégorie: {currentRecipe.category}</li>}
+                {currentRecipe.isComposite && <li>Plat Composé: Oui</li>}
+              </ul>
+            </div>
+
+            {currentRecipe.isComposite && currentRecipe.compositeDishes && currentRecipe.compositeDishes.length > 0 && (
+                <div className="mb-6">
+                    <h3 className="text-2xl font-semibold text-gray-800 dark:text-gray-100 mb-3">Composé de:</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {currentRecipe.compositeDishes.map(dishId => {
+                            const dish = recipes.find(r => r.id === dishId) || publicRecipes.find(r => r.id === dishId);
+                            if (dish) {
+                                return (
+                                    <div key={dish.id} className="flex items-center p-3 bg-gray-100 dark:bg-gray-700 rounded-lg shadow-sm">
+                                        <img src={dish.image || 'https://via.placeholder.com/50'} alt={dish.name} className="w-16 h-16 object-cover rounded-full mr-4" />
+                                        <div>
+                                            <p className="font-bold text-gray-900 dark:text-white">{dish.name}</p>
+                                            <p className="text-sm text-gray-700 dark:text-gray-300">{dish.description.substring(0, 50)}...</p>
+                                        </div>
+                                    </div>
+                                );
+                            }
+                            return null;
+                        })}
+                    </div>
+                </div>
+            )}
+            <div className="flex justify-center mt-6">
+              <button
+                onClick={() => setShowDetailModal(false)}
+                className="px-6 py-3 bg-primary-600 text-white rounded-lg shadow-md hover:bg-primary-700 transition duration-300"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-8 text-center relative">
+            <button
+              onClick={() => setShowImportModal(false)}
+              className="absolute top-4 right-4 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-2xl font-bold"
+            >
+              &times;
+            </button>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Importer des Plats (JSON)</h2>
+            <p className="text-gray-700 dark:text-gray-300 mb-4">
+              Veuillez sélectionner un fichier JSON contenant les recettes à importer.
+              Les plats importés seront ajoutés à votre collection privée et marqués comme "Nouveaux".
+            </p>
+            <input
+              type="file"
+              accept=".json"
+              onChange={handleFileImport}
+              className="w-full text-sm text-gray-900 dark:text-white file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100 dark:file:bg-green-800 dark:file:text-white dark:hover:file:bg-green-700"
+              disabled={importing}
+            />
+            {importing && (
+              <div className="mt-4 flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                <p className="ml-3 text-blue-600 dark:text-blue-400">Importation en cours...</p>
+              </div>
+            )}
+            <button
+              onClick={() => setShowImportModal(false)}
+              className="mt-6 px-6 py-2 bg-gray-300 text-gray-800 rounded-lg shadow-md hover:bg-gray-400 transition duration-300 dark:bg-gray-600 dark:text-white dark:hover:bg-gray-500"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Likes Modal */}
+      {showLikesModal && currentRecipe && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-8 relative">
+            <button
+              onClick={() => setShowLikesModal(false)}
+              className="absolute top-4 right-4 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-2xl font-bold"
+            >
+              &times;
+            </button>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6 text-center">Personnes qui aiment "{currentRecipe.name}"</h2>
+            {currentRecipe.likes && currentRecipe.likes.length > 0 ? (
+              <ul className="space-y-4 max-h-60 overflow-y-auto custom-scrollbar">
+                {currentRecipe.likes.map((likerUid, index) => (
+                  // In a real app, you'd fetch user profiles (name, photoURL) from Firebase users collection
+                  // For now, we'll just display UID or a placeholder.
+                  <li key={index} className="flex items-center p-3 bg-gray-100 dark:bg-gray-700 rounded-lg shadow-sm">
+                    <img src={`https://i.pravatar.cc/50?img=${index}`} alt="User Avatar" className="w-12 h-12 rounded-full object-cover mr-4 border-2 border-primary-500" />
+                    <span className="font-semibold text-gray-800 dark:text-gray-100">User ID: {likerUid.substring(0, 8)}...</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-center text-gray-600 dark:text-gray-400">Personne n'a encore aimé ce plat.</p>
+            )}
+            <div className="flex justify-center mt-6">
+              <button
+                onClick={() => setShowLikesModal(false)}
+                className="px-6 py-3 bg-primary-600 text-white rounded-lg shadow-md hover:bg-primary-700 transition duration-300"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comments Modal */}
+      {showCommentsModal && currentRecipe && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-xl w-full p-8 relative">
+            <button
+              onClick={() => setShowCommentsModal(false)}
+              className="absolute top-4 right-4 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white text-2xl font-bold"
+            >
+              &times;
+            </button>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6 text-center">Commentaires sur "{currentRecipe.name}"</h2>
+
+            <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <p className="text-red-500 text-sm mb-3 font-semibold">
+                    Avertissement: Veuillez respecter le langage et la bienséance dans vos commentaires.
+                </p>
+                <textarea
+                    placeholder="Ajouter un commentaire..."
+                    rows="3"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-blue-500 focus:border-blue-500 mb-3"
+                    value={currentCommentText} // Assuming a state for current comment text
+                    onChange={(e) => setCurrentCommentText(e.target.value)}
+                ></textarea>
+                <button
+                    onClick={() => { handleAddComment(currentRecipe.id, currentCommentText); setCurrentCommentText(''); }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition duration-300"
+                >
+                    Envoyer
+                </button>
+            </div>
+
+            {currentRecipe.comments && currentRecipe.comments.length > 0 ? (
+              <ul className="space-y-4 max-h-60 overflow-y-auto custom-scrollbar">
+                {currentRecipe.comments.sort((a, b) => b.timestamp - a.timestamp).map((comment, index) => (
+                  <li key={index} className="flex items-start p-3 bg-gray-100 dark:bg-gray-700 rounded-lg shadow-sm">
+                    <img src={comment.userPic || `https://i.pravatar.cc/50?img=${index + 10}`} alt="User Avatar" className="w-12 h-12 rounded-full object-cover mr-4 border-2 border-primary-500" />
+                    <div>
+                      <p className="font-semibold text-gray-900 dark:text-white">{comment.userName}</p>
+                      <p className="text-gray-700 dark:text-gray-300 text-sm mt-1">{comment.comment}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        {new Date(comment.timestamp?.seconds * 1000).toLocaleString()}
+                      </p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-center text-gray-600 dark:text-gray-400">Aucun commentaire pour ce plat.</p>
+            )}
+            <div className="flex justify-center mt-6">
+              <button
+                onClick={() => setShowCommentsModal(false)}
+                className="px-6 py-3 bg-primary-600 text-white rounded-lg shadow-md hover:bg-primary-700 transition duration-300"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Recipes;
